@@ -262,6 +262,73 @@ describe("buildHookOutput", () => {
     });
   });
 
+  describe.each(["pages", "recall"] as const)("autoInject %s timeout", (autoInject) => {
+    it.each([undefined, 2000, 15000])(
+      "passes the configured budget to retrieval (%s)",
+      async (injectTimeoutMs) => {
+        const client = makeClient({
+          searchKnowledgePages: vi.fn(async () => [
+            { id: "p1", name: "Retries", snippet: "Use backoff." },
+          ]),
+          recallObservations: vi.fn(async () => ["Use backoff."]),
+        });
+        const result = await buildHookOutput({
+          harness: "dsh",
+          prompt: MATCHING_PROMPT,
+          cfg: resolveConfig({ autoInject, injectTimeoutMs }),
+          client,
+          cacheFile,
+        });
+        const retrieval =
+          autoInject === "pages" ? client.searchKnowledgePages : client.recallObservations;
+        expect(retrieval).toHaveBeenCalledWith(MATCHING_PROMPT, {
+          timeoutMs: injectTimeoutMs ?? 7000,
+        });
+        expect(result.context).toContain("Use backoff.");
+        expect(client.reflect).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  it.each([undefined, 2000, 15000])(
+    "shares one fallback budget (%s) without changing the reflect timeout",
+    async (injectTimeoutMs) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      try {
+        const client = makeClient({
+          reflect: vi.fn(async () => {
+            throw new ReflectError("reflect timed out", undefined, true);
+          }),
+          searchKnowledgePages: vi.fn(async () => {
+            now.mockReturnValue(100_500);
+            return [];
+          }),
+          recallObservations: vi.fn(async () => ["Use backoff."]),
+        });
+        const result = await buildHookOutput({
+          harness: "dsh",
+          prompt: MATCHING_PROMPT,
+          cfg: resolveConfig({ injectTimeoutMs, reflectTimeoutMs: 3000 }),
+          client,
+          cacheFile,
+        });
+        expect(client.reflect).toHaveBeenCalledWith(buildReflectQuery(MATCHING_PROMPT), {
+          budget: "low",
+          timeoutMs: 3000,
+        });
+        expect(client.searchKnowledgePages).toHaveBeenCalledWith(MATCHING_PROMPT, {
+          timeoutMs: injectTimeoutMs ?? 7000,
+        });
+        expect(client.recallObservations).toHaveBeenCalledWith(MATCHING_PROMPT, {
+          timeoutMs: (injectTimeoutMs ?? 7000) - 500,
+        });
+        expect(result.context).toContain("Use backoff.");
+      } finally {
+        now.mockRestore();
+      }
+    }
+  );
+
   describe("reflect fallback (timeout / 5xx)", () => {
     const timedOut = () => new ReflectError("reflect timed out after 20000ms", undefined, true);
     const serverError = () => new ReflectError("reflect 502 bad gateway", 502, false);

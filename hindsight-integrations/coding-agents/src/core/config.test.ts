@@ -81,6 +81,67 @@ describe("loadConfig layering", () => {
   });
 });
 
+describe("injectTimeoutMs", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to the existing 7000ms budget", () => {
+    expect(resolveConfig({}).injectTimeoutMs).toBe(7000);
+  });
+
+  it.each([2000, 15000])("accepts a configured %ims budget", (injectTimeoutMs) => {
+    writeJson(globalCfg, { injectTimeoutMs });
+    expect(loadConfig({ path: globalCfg }).injectTimeoutMs).toBe(injectTimeoutMs);
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity, -Infinity])(
+    "falls back to 7000ms for an invalid numeric budget (%s)",
+    (injectTimeoutMs) => {
+      expect(resolveConfig({ injectTimeoutMs }).injectTimeoutMs).toBe(7000);
+    }
+  );
+
+  it("rejects a string timeout in JSON instead of passing it to AbortSignal.timeout", () => {
+    writeJson(globalCfg, { injectTimeoutMs: "15000" });
+    expect(loadConfig({ path: globalCfg }).injectTimeoutMs).toBe(7000);
+  });
+
+  it("reads the numeric env fallback and lets the file override it", () => {
+    vi.stubEnv("HINDSIGHT_INJECT_TIMEOUT_MS", "15000");
+    expect(loadConfig({ path: globalCfg }).injectTimeoutMs).toBe(15000);
+    writeJson(globalCfg, { injectTimeoutMs: 2000 });
+    expect(loadConfig({ path: globalCfg }).injectTimeoutMs).toBe(2000);
+  });
+
+  it.each(["", "soon", "Infinity", "0", "-1", "1.5"])(
+    "falls back to the default for an invalid env timeout (%s)",
+    (value) => {
+      const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        vi.stubEnv("HINDSIGHT_INJECT_TIMEOUT_MS", value);
+        expect(loadConfig({ path: globalCfg }).injectTimeoutMs).toBe(7000);
+      } finally {
+        warn.mockRestore();
+      }
+    }
+  );
+
+  it("honors harness and bank overrides without changing reflect timeouts", () => {
+    writeJson(globalCfg, {
+      injectTimeoutMs: 15000,
+      harnesses: { dsh: { injectTimeoutMs: 2000 } },
+      banks: { slow: { injectTimeoutMs: 25000 } },
+    });
+    const cfg = loadConfig({ path: globalCfg, harness: "dsh" });
+    expect(cfg.injectTimeoutMs).toBe(2000);
+    expect(applyBankConfig(cfg, "slow").cfg.injectTimeoutMs).toBe(25000);
+    expect(applyBankConfig(cfg, "other").cfg.injectTimeoutMs).toBe(2000);
+    expect(cfg.reflectTimeoutMs).toBe(20000);
+    expect(cfg.reflectToolTimeoutMs).toBe(330000);
+  });
+});
+
 describe("maxParallelRetains", () => {
   it("defaults to 10 when unset", () => {
     expect(loadConfig({ harness: "claude-code" }).maxParallelRetains).toBe(10);

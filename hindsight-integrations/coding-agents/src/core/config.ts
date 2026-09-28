@@ -106,6 +106,10 @@ export interface RawConfig {
    *  it, fits the 30s prompt-hook timeout the installer registers on hook harnesses; going higher
    *  there needs that host timeout raised too, or the host kills the hook mid-reflect. */
   reflectTimeoutMs?: number;
+  /** Timeout for pages/recall auto-injection, and the shared budget for the entire reflect
+   *  fallback chain (default 7000). Reflect itself still uses reflectTimeoutMs. On hook
+   *  harnesses, both budgets plus overhead must fit the host's prompt-hook timeout. */
+  injectTimeoutMs?: number;
   /** Timeout for the agent-invoked `hindsight_reflect` tool (default 330000). Deliberately its own
    *  knob and much larger than `reflectTimeoutMs`: that one bounds an automatic hook that must fit
    *  the host's hook window, whereas this one bounds a call the agent made on purpose and waits on,
@@ -292,6 +296,7 @@ export interface Config {
   retainSessions: boolean;
   maxParallelRetains: number;
   reflectTimeoutMs: number;
+  injectTimeoutMs: number;
   reflectToolTimeoutMs: number;
   reflectBudget: "low" | "mid" | "high";
   autoInject: AutoInject;
@@ -450,6 +455,8 @@ function resolveCustomPages(raw: RawConfig["customPages"]): CustomPagesConfig {
 
 /** Default timeout for the automatic hook reflect — see RawConfig.reflectTimeoutMs. */
 export const DEFAULT_REFLECT_TIMEOUT_MS = 20_000;
+/** Default retrieval auto-inject budget — see RawConfig.injectTimeoutMs. */
+const DEFAULT_INJECT_TIMEOUT_MS = 7_000;
 /** Default timeout for the agent-invoked `hindsight_reflect` tool — see RawConfig.reflectToolTimeoutMs. */
 export const DEFAULT_REFLECT_TOOL_TIMEOUT_MS = 330_000;
 
@@ -561,6 +568,13 @@ export function resolveConfig(raw: RawConfig = {}): Config {
       : DEFAULT_RETAIN_EXTRACTION_MODE,
     maxParallelRetains: raw.maxParallelRetains || 10,
     reflectTimeoutMs: raw.reflectTimeoutMs || DEFAULT_REFLECT_TIMEOUT_MS,
+    // AbortSignal.timeout requires integer milliseconds; invalid config must not break injection.
+    injectTimeoutMs:
+      typeof raw.injectTimeoutMs === "number" &&
+      Number.isSafeInteger(raw.injectTimeoutMs) &&
+      raw.injectTimeoutMs > 0
+        ? raw.injectTimeoutMs
+        : DEFAULT_INJECT_TIMEOUT_MS,
     // Inherit an explicitly-raised reflectTimeoutMs (that is what users reaching for a longer
     // reflect already set), but never let it LOWER the tool below the default — a short window is
     // set to bound the automatic hook, not to cut off a call the agent is waiting on.
@@ -696,6 +710,7 @@ const ENV_KEYS = {
   retainSessions: "HINDSIGHT_RETAIN_SESSIONS",
   maxParallelRetains: "HINDSIGHT_MAX_PARALLEL_RETAINS",
   reflectTimeoutMs: "HINDSIGHT_REFLECT_TIMEOUT_MS",
+  injectTimeoutMs: "HINDSIGHT_INJECT_TIMEOUT_MS",
   reflectToolTimeoutMs: "HINDSIGHT_REFLECT_TOOL_TIMEOUT_MS",
   reflectBudget: "HINDSIGHT_REFLECT_BUDGET",
   autoInject: "HINDSIGHT_AUTO_INJECT",
@@ -742,6 +757,7 @@ const ENV_NUMBERS = new Set<keyof RawConfig>([
   "daemonIdleTimeout",
   "maxParallelRetains",
   "reflectTimeoutMs",
+  "injectTimeoutMs",
   "reflectToolTimeoutMs",
   "pageSearchLimit",
   "pageRefreshEveryTurns",
